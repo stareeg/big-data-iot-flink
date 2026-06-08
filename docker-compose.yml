@@ -1,0 +1,58 @@
+# Локальная инфраструктура проекта
+# Поднимает брокер Kafka в режиме KRaft и базу PostgreSQL
+# Flink-job запускается нативно через python main.py и ходит на оба сервиса по localhost
+
+services:
+  kafka:
+    image: apache/kafka:3.9.2
+    container_name: iot_kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # Одиночный узел совмещает роли брокера и контроллера
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # Брокер слушает все интерфейсы для доступа с хоста, контроллер только localhost
+      # иначе KRaft пытается опубликовать advertised-адрес 0.0.0.0 и падает на валидации
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://localhost:9093
+      # Клиенты с хоста подключаются по localhost
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Узел один, поэтому везде одна реплика
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      # Брокер готов, когда отвечает на запрос списка топиков
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:17
+    container_name: iot_postgres
+    ports:
+      # На хосте публикуем 5433, потому что 5432 часто занят локальной установкой
+      # PostgreSQL. Внутри контейнера порт остаётся штатным 5432
+      - "5433:5432"
+    environment:
+      # Локальные креды для разработки, не для боевой среды
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: iot
+      POSTGRES_DB: iot
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Справочник создаёт и наполняет main.py через psycopg2 при старте, init-скрипты не монтируем
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot -d iot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_data:
